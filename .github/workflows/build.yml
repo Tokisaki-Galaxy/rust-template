@@ -78,7 +78,7 @@ jobs:
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: build-essential musl-tools pkg-config
+          packages: build-essential musl-tools pkg-config git
           version: 1.0
 
       - name: Setup musl-cross directory
@@ -106,22 +106,22 @@ jobs:
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Calculate Artifacts Size
-              if: steps.build.outputs.status == 'success'
-              run: |
-                echo "=========================================="
-                echo "📦 BUILD ARTIFACTS SUMMARY"
-                echo "=========================================="
-                printf "| %-50s | %-10s |\n" "File Name" "Size (KB)"
-                printf "| %-50s | %-10s |\n" "--------------------------------------------------" "----------"
+        if: steps.build.outputs.status == 'success'
+        run: |
+          echo "=========================================="
+          echo "📦 BUILD ARTIFACTS SUMMARY"
+          echo "=========================================="
+          printf "| %-50s | %-10s |\n" "File Name" "Size (KB)"
+          printf "| %-50s | %-10s |\n" "--------------------------------------------------" "----------"
 
-                cd release
-                for file in *.tar.gz; do
-                  if [ -f "$file" ]; then
-                    SIZE=$(du -k "$file" | cut -f1)
-                    printf "| %-50s | %8s KB |\n" "$file" "$SIZE"
-                  fi
-                done
-                echo "=========================================="
+          cd release
+          for file in *.tar.gz; do
+            if [ -f "$file" ]; then
+              SIZE=$(du -k "$file" | cut -f1)
+              printf "| %-50s | %8s KB |\n" "$file" "$SIZE"
+            fi
+          done
+          echo "=========================================="
 
       - name: Upload artifacts
         if: steps.build.outputs.status == 'success'
