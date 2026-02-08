@@ -187,6 +187,8 @@ jobs:
           upx --version
 
       - name: Extract, compress and display comparison
+        env:
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           mkdir -p workdir release
@@ -215,6 +217,7 @@ jobs:
                 SIZE_BEFORE_KB=$((SIZE_BEFORE / 1024))
 
                 # Compress with UPX (skip if unsupported architecture)
+                # Using --best --lzma for maximum compression ratio
                 if upx --best --lzma "$EXECUTABLE" 2>/dev/null; then
                   # Get size after compression
                   SIZE_AFTER=$(stat -c%s "$EXECUTABLE")
@@ -231,7 +234,10 @@ jobs:
 
                 # Re-package the compressed files
                 cd workdir
-                tar -czvf "../release/${BASENAME}.tar.gz" "$(basename "$PACKAGE_DIR")" 2>/dev/null
+                if ! tar -czvf "../release/${BASENAME}.tar.gz" "$(basename "$PACKAGE_DIR")"; then
+                  echo "Error: Failed to create tarball for ${TARGET}"
+                  exit 1
+                fi
                 cd ..
               fi
 
