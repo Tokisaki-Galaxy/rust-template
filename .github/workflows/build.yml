@@ -110,7 +110,7 @@ jobs:
       - name: Build ${{ matrix.target }}
         run: |
           if [ "${{ matrix.use_nightly }}" = "true" ]; then
-            cross +nightly build --release --target ${{ matrix.target }} -Z build-std
+            cross +nightly build -Z build-std --release --target ${{ matrix.target }}
           else
             cross build --release --target ${{ matrix.target }}
           fi
