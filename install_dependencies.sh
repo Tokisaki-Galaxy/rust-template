@@ -1,26 +1,25 @@
 #!/bin/bash
-# 安装所有交叉编译工具链及依赖
-# 使用方法: ./install_dependencies.sh
+# Install musl cross-compilation toolchains
+# Prerequisites: build-essential, musl-tools, Rust stable + nightly toolchains
+# In CI, these prerequisites are handled by the workflow (build.yml)
 
 set -e
 
 INSTALL_BASE="/opt/musl-cross"
-MUSL_CC_BASE="https://github.com/timsaya/musl-cc/releases/download/v0.1.0/"
-PACKAGE_MANAGER=""
 
-# 颜色输出
+# Color output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo "=========================================="
-echo "安装交叉编译工具链"
-echo "安装目录: $INSTALL_BASE"
+echo "Install cross-compilation toolchains"
+echo "Install directory: $INSTALL_BASE"
 echo "=========================================="
 
-# 定义需要安装的工具链
-# 格式: "工具链名称:链接器名称"
+# Define toolchains to install
+# Format: "toolchain_name:linker_name"
 declare -A TOOLCHAINS=(
     ["arm-linux-musleabihf-cross"]="arm-linux-musleabihf-gcc"
     ["arm-linux-musleabi-cross"]="arm-linux-musleabi-gcc"
@@ -31,101 +30,14 @@ declare -A TOOLCHAINS=(
     ["mipsel-linux-musl-cross"]="mipsel-linux-musl-gcc"
 )
 
-# 选择包管理器
-detect_package_manager() {
-    if command -v apt-get &> /dev/null; then
-        PACKAGE_MANAGER="apt"
-    elif command -v yum &> /dev/null; then
-        PACKAGE_MANAGER="yum"
-    elif command -v dnf &> /dev/null; then
-        PACKAGE_MANAGER="dnf"
-    elif command -v pacman &> /dev/null; then
-        PACKAGE_MANAGER="pacman"
-    else
-        PACKAGE_MANAGER=""
-    fi
-}
+MUSL_CC_BASE="https://github.com/timsaya/musl-cc/releases/download/v0.1.0/"
 
-install_system_packages() {
-    case "$PACKAGE_MANAGER" in
-        apt)
-            apt-get update
-            apt-get install -y build-essential curl tar gzip xz-utils pkg-config gcc file musl-tools
-            ;;
-        yum)
-            yum groupinstall -y "Development Tools"
-            yum install -y curl tar gzip xz pkgconfig gcc file musl-gcc musl-libc-static
-            ;;
-        dnf)
-            dnf groupinstall -y 'Development Tools'
-            dnf install -y curl tar gzip xz pkg-config gcc file musl-gcc musl-libc-static
-            ;;
-        pacman)
-            pacman -Sy --noconfirm base-devel curl tar gzip xz pkgconf gcc file musl
-            ;;
-        *)
-            echo -e "${RED}错误: 未能识别的包管理器，请手动安装 gcc、make、curl、tar、gzip、xz、pkg-config、musl-tools${NC}"
-            exit 1
-            ;;
-    esac
-}
-
-echo ""
-echo -e "${YELLOW}[1/4] 安装系统依赖 (gcc/curl 等)...${NC}"
-detect_package_manager
-install_system_packages
-
-# 创建安装目录
+# Create install directory
 mkdir -p "$INSTALL_BASE"
-chown "$(whoami)":"$(whoami)" "$INSTALL_BASE" 2>/dev/null || true
 
-# 安装 Rust 工具链
+# Install each toolchain
 echo ""
-echo -e "${YELLOW}[2/4] 安装 Rust 工具链...${NC}"
-if ! command -v rustup &> /dev/null; then
-    echo "安装 rustup..."
-    curl --proto '=https' --tlsv1.2 -f https://sh.rustup.rs | sh -s -- -y --profile minimal
-fi
-
-if [ -f "$HOME/.cargo/env" ]; then
-    # shellcheck disable=SC1090
-    source "$HOME/.cargo/env"
-fi
-export PATH="$HOME/.cargo/bin:$PATH"
-
-echo "安装/更新 stable 工具链..."
-rustup toolchain install stable || true
-
-echo "安装/更新 nightly 工具链..."
-rustup toolchain install nightly
-
-echo "添加 rust-src 组件 (nightly)..."
-rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu || {
-    echo -e "${RED}安装 rust-src 失败，请检查 rustup 输出${NC}"
-    exit 1
-}
-
-RUST_TARGETS=(
-    "x86_64-unknown-linux-musl"
-    "aarch64-unknown-linux-musl"
-    "armv7-unknown-linux-musleabihf"
-    "armv7-unknown-linux-musleabi"
-    "armv5te-unknown-linux-musleabi"
-    "arm-unknown-linux-musleabi"
-    "arm-unknown-linux-musleabihf"
-    "riscv64gc-unknown-linux-musl"
-    "powerpc64le-unknown-linux-musl"
-)
-
-echo "安装/更新 Rust 交叉目标..."
-for TARGET in "${RUST_TARGETS[@]}"; do
-    echo "  rustup target add $TARGET"
-    rustup target add "$TARGET"
-done
-
-# 安装每个工具链
-echo ""
-echo -e "${YELLOW}[3/4] 下载并安装交叉工具链...${NC}"
+echo -e "${YELLOW}[1/2] Downloading and installing cross toolchains...${NC}"
 INSTALLED_COUNT=0
 SKIPPED_COUNT=0
 
@@ -134,65 +46,63 @@ for toolchain_name in "${!TOOLCHAINS[@]}"; do
     install_dir="$INSTALL_BASE/$toolchain_name"
     download_url="$MUSL_CC_BASE/$toolchain_name.tgz"
     
-    echo -n "  检查 $toolchain_name ... "
+    echo -n "  Checking $toolchain_name ... "
     
-    # 检查工具链是否已完整安装（检查目录和链接器都存在）
+    # Check if toolchain is already fully installed (directory and linker both exist)
     if [ -d "$install_dir" ] && [ -f "$install_dir/bin/$linker_name" ] && [ -x "$install_dir/bin/$linker_name" ]; then
-        echo -e "${GREEN}已存在，跳过${NC}"
+        echo -e "${GREEN}Already exists, skipping${NC}"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
     
-    # 如果目录存在但链接器不存在，可能是损坏的安装，先清理
+    # If directory exists but linker doesn't, it might be a broken install - clean up
     if [ -d "$install_dir" ]; then
-        echo -n "清理损坏的安装... "
+        echo -n "Cleaning broken install... "
         rm -rf "$install_dir"
     fi
     
-    # 下载并安装
-    echo "下载并安装..."
+    # Download and install
+    echo "Downloading and installing..."
     cd /tmp
     if curl -L -o "${toolchain_name}.tgz" "$download_url" && [ -f "${toolchain_name}.tgz" ] && [ -s "${toolchain_name}.tgz" ]; then
         tar -xzf "${toolchain_name}.tgz" -C "$INSTALL_BASE"
         rm -f "${toolchain_name}.tgz"
         
-        # 验证安装
+        # Verify installation
         if [ -d "$install_dir" ] && [ -f "$install_dir/bin/$linker_name" ] && [ -x "$install_dir/bin/$linker_name" ]; then
-            echo -e "${GREEN}成功${NC}"
+            echo -e "${GREEN}Success${NC}"
             INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
         else
-            echo -e "${RED}失败 (安装后验证失败)${NC}"
+            echo -e "${RED}Failed (verification failed after install)${NC}"
         fi
     else
-        echo -e "${RED}失败 (下载或解压错误)${NC}"
+        echo -e "${RED}Failed (download or extraction error)${NC}"
     fi
 done
 
-# 验证所有工具链
+# Verify all toolchains
 echo ""
-echo -e "${YELLOW}[4/4] 验证安装...${NC}"
+echo -e "${YELLOW}[2/2] Verifying installation...${NC}"
 for toolchain_name in "${!TOOLCHAINS[@]}"; do
     linker_name="${TOOLCHAINS[$toolchain_name]}"
     install_dir="$INSTALL_BASE/$toolchain_name"
     
     if [ -d "$install_dir" ] && [ -f "$install_dir/bin/$linker_name" ] && [ -x "$install_dir/bin/$linker_name" ]; then
-        version=$("$install_dir/bin/$linker_name" --version 2>&1 | head -1 || echo "无法获取版本")
+        version=$("$install_dir/bin/$linker_name" --version 2>&1 | head -1 || echo "Unable to get version")
         echo -e "  ${GREEN}✓${NC} $linker_name: $version"
     else
-        echo -e "  ${RED}✗${NC} $linker_name: 未安装或损坏"
+        echo -e "  ${RED}✗${NC} $linker_name: Not installed or broken"
     fi
 done
 
-source ~/.cargo/env
-
-# 总结
+# Summary
 echo ""
 echo "=========================================="
-echo "安装完成"
+echo "Installation complete"
 echo "=========================================="
-echo "新安装: $INSTALLED_COUNT"
-echo "已存在: $SKIPPED_COUNT"
-echo "总计: ${#TOOLCHAINS[@]}"
+echo "Newly installed: $INSTALLED_COUNT"
+echo "Already existed: $SKIPPED_COUNT"
+echo "Total: ${#TOOLCHAINS[@]}"
 echo ""
-echo "工具链位置: $INSTALL_BASE"
+echo "Toolchain location: $INSTALL_BASE"
 echo ""
