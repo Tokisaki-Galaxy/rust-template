@@ -31,11 +31,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "${{ runner.os }}-section-cache-${{ hashFiles('**/Cargo.lock') }}"
-
       - name: Set version
         id: set_version
         run: |
@@ -56,20 +51,57 @@ jobs:
           echo "Updated Cargo.toml version to: $VERSION"
           grep '^version' Cargo.toml
 
-      - name: Install dependencies
-        id: install_dependencies
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            x86_64-unknown-linux-musl,
+            aarch64-unknown-linux-musl,
+            armv7-unknown-linux-musleabihf,
+            armv7-unknown-linux-musleabi,
+            armv5te-unknown-linux-musleabi,
+            arm-unknown-linux-musleabi,
+            arm-unknown-linux-musleabihf,
+            riscv64gc-unknown-linux-musl,
+            powerpc64le-unknown-linux-musl
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: build-essential musl-tools pkg-config
+          version: 1.0
+
+      - name: Setup musl-cross directory
+        run: |
+          sudo mkdir -p /opt/musl-cross
+          sudo chown "$(id -u):$(id -g)" /opt/musl-cross
+
+      - name: Cache musl cross toolchains
+        uses: actions/cache@v4
+        with:
+          path: /opt/musl-cross
+          key: ${{ runner.os }}-musl-cross-v0.1.0
+
+      - name: Install cross compilation toolchains
         run: |
           chmod +x ./install_dependencies.sh
-          sudo ./install_dependencies.sh
-          df -H
-          echo "status=success" >> $GITHUB_OUTPUT
+          ./install_dependencies.sh
 
       - name: Build rust-template ${{ steps.set_version.outputs.version }}
         id: build
-        if: steps.install_dependencies.outputs.status == 'success'
         run: |
           chmod +x ./build_release.sh
-          sudo ./build_release.sh
+          ./build_release.sh
           df -H
           echo "status=success" >> $GITHUB_OUTPUT
 

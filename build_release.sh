@@ -1,8 +1,6 @@
 #!/bin/bash
 set -e
 
-source ~/.cargo/env
-
 # Define project name and version
 PROJECT_NAME="rust-template"
 VERSION=$(grep "^version" Cargo.toml | cut -d '"' -f2)
@@ -11,26 +9,6 @@ echo "Build version: $VERSION"
 # Ensure target directory exists
 RELEASE_DIR="release"
 mkdir -p $RELEASE_DIR
-
-# Ensure necessary tools are installed
-echo "Checking and installing necessary tools..."
-
-# Check and install nightly toolchain (required for MIPS build-std)
-echo "Checking nightly toolchain..."
-if ! rustup toolchain list | grep -q "nightly"; then
-    echo "Installing nightly toolchain..."
-    rustup toolchain install nightly
-else
-    echo "✓ Nightly toolchain already installed"
-fi
-
-echo "Checking rust-src component for nightly (required for build-std)..."
-if ! rustup component list --toolchain nightly | grep -q "rust-src (installed)"; then
-    echo "Installing rust-src component for nightly..."
-    rustup component add rust-src --toolchain nightly
-else
-    echo "✓ rust-src already installed for nightly"
-fi
 
 # Build target platform lists
 DEFAULT_TARGETS=(
