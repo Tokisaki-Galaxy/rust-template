@@ -19,10 +19,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install cross
+        uses: taiki-e/install-action@cross
 
       - name: Cache Cargo registry and build artifacts
         uses: actions/cache@v4
@@ -47,3 +55,4 @@ jobs:
           cargo fmt --check 2>&1 || echo "cargo fmt check failed"
           cargo clippy -- -D warnings 2>&1 || echo "cargo clippy failed"
           cargo test 2>&1 || echo "cargo test failed"
+          cross --version 2>&1 || echo "cross version check failed"

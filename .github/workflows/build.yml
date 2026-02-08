@@ -1,5 +1,5 @@
 #
-# Description: Auto compile rust-template for multiple architectures
+# Description: Auto compile rust-template for multiple architectures using cross-rs
 #
 name: "Build rust-template"
 on:
@@ -20,11 +20,14 @@ permissions:
 
 env:
   TZ: Asia/Shanghai
+  PROJECT_NAME: rust-template
 
 jobs:
-  build:
-    name: Build Multi-Arch
+  prepare:
+    name: Prepare
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set_version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,101 +49,158 @@ jobs:
           fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-          # Inject version into Cargo.toml
+  build:
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 architecture
+          - target: x86_64-unknown-linux-musl
+          # AArch64 (ARM64) architecture
+          - target: aarch64-unknown-linux-musl
+          # ARM 32-bit architecture
+          - target: armv7-unknown-linux-musleabihf
+          - target: armv7-unknown-linux-musleabi
+          - target: armv5te-unknown-linux-musleabi
+          - target: arm-unknown-linux-musleabi
+          - target: arm-unknown-linux-musleabihf
+          # MIPS 32-bit architectures (cross-rs Docker + nightly build-std via Cross.toml)
+          - target: mips-unknown-linux-musl
+            use_nightly: true
+          - target: mipsel-unknown-linux-musl
+            use_nightly: true
+          # RISC-V architecture (no cross-rs Docker image, use cargo + musl-cc)
+          - target: riscv64gc-unknown-linux-musl
+            musl_cc: riscv64-linux-musl-cross
+            musl_cc_linker: riscv64-linux-musl-gcc
+          # PowerPC architecture (no cross-rs Docker image, use cargo + musl-cc)
+          - target: powerpc64le-unknown-linux-musl
+            musl_cc: powerpc64le-linux-musl-cross
+            musl_cc_linker: powerpc64le-linux-musl-gcc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version in Cargo.toml
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
           sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
           echo "Updated Cargo.toml version to: $VERSION"
           grep '^version' Cargo.toml
 
+      - name: Install Rust stable toolchain
+        if: ${{ !matrix.use_nightly }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
       - name: Install Rust nightly toolchain
+        if: ${{ matrix.use_nightly }}
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
 
-      - name: Install Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: >-
-            x86_64-unknown-linux-musl,
-            aarch64-unknown-linux-musl,
-            armv7-unknown-linux-musleabihf,
-            armv7-unknown-linux-musleabi,
-            armv5te-unknown-linux-musleabi,
-            arm-unknown-linux-musleabi,
-            arm-unknown-linux-musleabihf,
-            riscv64gc-unknown-linux-musl,
-            powerpc64le-unknown-linux-musl
+      - name: Install cross
+        if: ${{ !matrix.musl_cc }}
+        uses: taiki-e/install-action@cross
+
+      - name: Install musl-cross toolchain
+        if: ${{ matrix.musl_cc }}
+        run: |
+          sudo mkdir -p /opt/musl-cross
+          curl -fsSL "https://github.com/timsaya/musl-cc/releases/download/v0.1.0/${{ matrix.musl_cc }}.tgz" \
+            | sudo tar xz -C /opt/musl-cross
+
+      - name: Configure cargo linker
+        if: ${{ matrix.musl_cc }}
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'TOML'
+          [target.${{ matrix.target }}]
+          linker = "/opt/musl-cross/${{ matrix.musl_cc }}/bin/${{ matrix.musl_cc_linker }}"
+          rustflags = ["-C", "link-args=-lm", "-C", "panic=unwind"]
+          TOML
+          cat .cargo/config.toml
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
+          shared-key: "${{ runner.os }}-${{ matrix.target }}"
 
-      - name: Cache apt packages
-        uses: awalsh128/cache-apt-pkgs-action@v1
+      - name: Build with cross
+        if: ${{ !matrix.musl_cc }}
+        run: |
+          if [ "${{ matrix.use_nightly }}" = "true" ]; then
+            cross +nightly build -Z build-std=std,panic_abort --release --target ${{ matrix.target }}
+          else
+            cross build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Build with cargo
+        if: ${{ matrix.musl_cc }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          PACKAGE_DIR="${PROJECT_NAME}-${VERSION}-${TARGET}"
+
+          mkdir -p "release/${PACKAGE_DIR}"
+          cp "target/${TARGET}/release/${PROJECT_NAME}" "release/${PACKAGE_DIR}/"
+          cp LICENSE "release/${PACKAGE_DIR}/" 2>/dev/null || true
+          cp README.md "release/${PACKAGE_DIR}/" 2>/dev/null || true
+
+          tar -czvf "release/${PROJECT_NAME}-${VERSION}-${TARGET}.tar.gz" -C release "${PACKAGE_DIR}"
+          rm -rf "release/${PACKAGE_DIR}"
+
+          echo "📦 Package: ${PROJECT_NAME}-${VERSION}-${TARGET}.tar.gz"
+          ls -lh "release/${PROJECT_NAME}-${VERSION}-${TARGET}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          packages: build-essential musl-tools pkg-config git
-          version: 1.0
+          name: ${{ env.PROJECT_NAME }}-${{ matrix.target }}
+          path: release/*.tar.gz
 
-      - name: Setup musl-cross directory
-        run: |
-          sudo mkdir -p /opt/musl-cross
-          sudo chown "$(id -u):$(id -g)" /opt/musl-cross
-
-      - name: Cache musl cross toolchains
-        uses: actions/cache@v4
+  release:
+    name: Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4.1.7
         with:
-          path: /opt/musl-cross
-          key: ${{ runner.os }}-musl-cross-v0.1.0
-
-      - name: Install cross compilation toolchains
-        run: |
-          chmod +x ./install_dependencies.sh
-          ./install_dependencies.sh
-
-      - name: Build rust-template ${{ steps.set_version.outputs.version }}
-        id: build
-        run: |
-          chmod +x ./build_release.sh
-          ./build_release.sh
-          df -H
-          echo "status=success" >> $GITHUB_OUTPUT
+          path: release
+          pattern: ${{ env.PROJECT_NAME }}-*
+          merge-multiple: true
 
       - name: Calculate Artifacts Size
-        if: steps.build.outputs.status == 'success'
         run: |
           echo "=========================================="
           echo "📦 BUILD ARTIFACTS SUMMARY"
           echo "=========================================="
-          printf "| %-50s | %-10s |\n" "File Name" "Size (KB)"
-          printf "| %-50s | %-10s |\n" "--------------------------------------------------" "----------"
-
-          cd release
-          for file in *.tar.gz; do
+          printf "| %-60s | %-10s |\n" "File Name" "Size (KB)"
+          printf "| %-60s | %-10s |\n" "------------------------------------------------------------" "----------"
+          for file in release/*.tar.gz; do
             if [ -f "$file" ]; then
               SIZE=$(du -k "$file" | cut -f1)
-              printf "| %-50s | %8s KB |\n" "$file" "$SIZE"
+              printf "| %-60s | %8s KB |\n" "$(basename "$file")" "$SIZE"
             fi
           done
           echo "=========================================="
 
-      - name: Upload artifacts
-        if: steps.build.outputs.status == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-packages
-          path: release/*.tar.gz
-
-      - name: Prepare release
-        id: prepare_release
-        if: startsWith(github.ref, 'refs/tags/v') && steps.build.outputs.status == 'success'
+      - name: Prepare release notes
         run: |
           echo "![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ github.ref_name }}/total?style=flat-square)" >> release.txt
-          cd release
-          echo "release_path=$PWD" >> $GITHUB_OUTPUT
-          echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Publish Release
-        if: steps.prepare_release.outputs.status == 'success'
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -149,4 +209,4 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           body_path: release.txt
-          files: ${{ steps.prepare_release.outputs.release_path }}/*
+          files: release/*
