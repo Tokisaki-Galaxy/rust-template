@@ -189,7 +189,7 @@ jobs:
       - name: Extract, compress and display comparison
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          mkdir -p compressed release
+          mkdir -p workdir release
 
           echo "=========================================="
           echo "🗜️  UPX COMPRESSION SUMMARY"
@@ -203,12 +203,13 @@ jobs:
               TARGET=$(echo "$BASENAME" | sed "s/${PROJECT_NAME}-${VERSION}-//")
 
               # Extract the tarball
-              tar -xzf "$tarball" -C compressed/
+              tar -xzf "$tarball" -C workdir/
 
-              # Find the executable
-              EXECUTABLE=$(find compressed -type f -name "${PROJECT_NAME}" -executable | head -n 1)
+              # Find the executable (should be in workdir/PROJECT_NAME-VERSION-TARGET/)
+              PACKAGE_DIR=$(find workdir -maxdepth 1 -type d -name "${PROJECT_NAME}-*" | head -n 1)
+              EXECUTABLE="${PACKAGE_DIR}/${PROJECT_NAME}"
 
-              if [ -n "$EXECUTABLE" ]; then
+              if [ -f "$EXECUTABLE" ]; then
                 # Get size before compression
                 SIZE_BEFORE=$(stat -c%s "$EXECUTABLE")
                 SIZE_BEFORE_KB=$((SIZE_BEFORE / 1024))
@@ -228,15 +229,14 @@ jobs:
                   printf "| %-40s | %10s KB | %12s | %10s |\n" "$TARGET" "$SIZE_BEFORE_KB" "unsupported" "N/A"
                 fi
 
-                # Re-package the compressed executable
-                PACKAGE_DIR="${PROJECT_NAME}-${VERSION}-${TARGET}"
-                cd compressed
-                tar -czvf "../release/${PROJECT_NAME}-${VERSION}-${TARGET}.tar.gz" "${PACKAGE_DIR}" 2>/dev/null
+                # Re-package the compressed files
+                cd workdir
+                tar -czvf "../release/${BASENAME}.tar.gz" "$(basename "$PACKAGE_DIR")" 2>/dev/null
                 cd ..
               fi
 
               # Clean up extracted files
-              rm -rf compressed/*
+              rm -rf workdir/*
             fi
           done
 
