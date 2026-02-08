@@ -67,15 +67,19 @@ jobs:
           - target: armv5te-unknown-linux-musleabi
           - target: arm-unknown-linux-musleabi
           - target: arm-unknown-linux-musleabihf
-          # RISC-V architecture
-          - target: riscv64gc-unknown-linux-musl
-          # PowerPC architecture
-          - target: powerpc64le-unknown-linux-musl
-          # MIPS 32-bit architectures (built with nightly + build-std)
+          # MIPS 32-bit architectures (cross-rs Docker + nightly build-std via Cross.toml)
           - target: mips-unknown-linux-musl
             use_nightly: true
           - target: mipsel-unknown-linux-musl
             use_nightly: true
+          # RISC-V architecture (no cross-rs Docker image, use cargo + musl-cc)
+          - target: riscv64gc-unknown-linux-musl
+            musl_cc: riscv64-linux-musl-cross
+            musl_cc_linker: riscv64-linux-musl-gcc
+          # PowerPC architecture (no cross-rs Docker image, use cargo + musl-cc)
+          - target: powerpc64le-unknown-linux-musl
+            musl_cc: powerpc64le-linux-musl-cross
+            musl_cc_linker: powerpc64le-linux-musl-gcc
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,6 +96,8 @@ jobs:
       - name: Install Rust stable toolchain
         if: ${{ !matrix.use_nightly }}
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install Rust nightly toolchain
         if: ${{ matrix.use_nightly }}
@@ -100,20 +106,44 @@ jobs:
           components: rust-src
 
       - name: Install cross
+        if: ${{ !matrix.musl_cc }}
         uses: taiki-e/install-action@cross
+
+      - name: Install musl-cross toolchain
+        if: ${{ matrix.musl_cc }}
+        run: |
+          sudo mkdir -p /opt/musl-cross
+          curl -fsSL "https://github.com/timsaya/musl-cc/releases/download/v0.1.0/${{ matrix.musl_cc }}.tgz" \
+            | sudo tar xz -C /opt/musl-cross
+
+      - name: Configure cargo linker
+        if: ${{ matrix.musl_cc }}
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'TOML'
+          [target.${{ matrix.target }}]
+          linker = "/opt/musl-cross/${{ matrix.musl_cc }}/bin/${{ matrix.musl_cc_linker }}"
+          rustflags = ["-C", "link-args=-lm", "-C", "panic=unwind"]
+          TOML
+          cat .cargo/config.toml
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "${{ runner.os }}-${{ matrix.target }}"
 
-      - name: Build ${{ matrix.target }}
+      - name: Build with cross
+        if: ${{ !matrix.musl_cc }}
         run: |
           if [ "${{ matrix.use_nightly }}" = "true" ]; then
-            cross +nightly build -Z build-std --release --target ${{ matrix.target }}
+            cross +nightly build --release --target ${{ matrix.target }}
           else
             cross build --release --target ${{ matrix.target }}
           fi
+
+      - name: Build with cargo
+        if: ${{ matrix.musl_cc }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
         run: |

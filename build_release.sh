@@ -101,7 +101,7 @@ for TARGET in "${NIGHTLY_TARGETS[@]}"; do
   echo ""
   echo "Starting build for $TARGET (nightly + build-std)..."
 
-  if cross +nightly build -q -Z build-std --release --target "$TARGET"; then
+  if cross +nightly build -q --release --target "$TARGET"; then
     echo "✓ Build successful (nightly build-std): $TARGET"
     package_target "$TARGET"
   else
